@@ -14,6 +14,15 @@ import { formatSnapshot } from '../snapshotFormatter.js';
 import type { IPage } from '../types.js';
 import { sendCommand } from './daemon-client.js';
 import { wrapForEval } from './utils.js';
+import {
+  clickJs,
+  typeTextJs,
+  pressKeyJs,
+  waitForTextJs,
+  scrollJs,
+  autoScrollJs,
+  networkRequestsJs,
+} from './dom-helpers.js';
 
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
@@ -100,49 +109,17 @@ export class Page implements IPage {
   }
 
   async click(ref: string): Promise<void> {
-    const safeRef = JSON.stringify(ref);
-    const code = `
-      (() => {
-        const ref = ${safeRef};
-        const el = document.querySelector('[data-ref="' + ref + '"]')
-          || document.querySelectorAll('a, button, input, [role="button"], [tabindex]')[parseInt(ref, 10) || 0];
-        if (!el) throw new Error('Element not found: ' + ref);
-        el.scrollIntoView({ behavior: 'instant', block: 'center' });
-        el.click();
-        return 'clicked';
-      })()
-    `;
+    const code = clickJs(ref);
     await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async typeText(ref: string, text: string): Promise<void> {
-    const safeRef = JSON.stringify(ref);
-    const safeText = JSON.stringify(text);
-    const code = `
-      (() => {
-        const ref = ${safeRef};
-        const el = document.querySelector('[data-ref="' + ref + '"]')
-          || document.querySelectorAll('input, textarea, [contenteditable]')[parseInt(ref, 10) || 0];
-        if (!el) throw new Error('Element not found: ' + ref);
-        el.focus();
-        el.value = ${safeText};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return 'typed';
-      })()
-    `;
+    const code = typeTextJs(ref, text);
     await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async pressKey(key: string): Promise<void> {
-    const code = `
-      (() => {
-        const el = document.activeElement || document.body;
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(key)}, bubbles: true }));
-        return 'pressed';
-      })()
-    `;
+    const code = pressKeyJs(key);
     await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
@@ -157,17 +134,7 @@ export class Page implements IPage {
     }
     if (options.text) {
       const timeout = (options.timeout ?? 30) * 1000;
-      const code = `
-        new Promise((resolve, reject) => {
-          const deadline = Date.now() + ${timeout};
-          const check = () => {
-            if (document.body.innerText.includes(${JSON.stringify(options.text)})) return resolve('found');
-            if (Date.now() > deadline) return reject(new Error('Text not found: ' + ${JSON.stringify(options.text)}));
-            setTimeout(check, 200);
-          };
-          check();
-        })
-      `;
+      const code = waitForTextJs(options.text, timeout);
       await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
     }
   }
@@ -189,19 +156,7 @@ export class Page implements IPage {
   }
 
   async networkRequests(includeStatic: boolean = false): Promise<any> {
-    const code = `
-      (() => {
-        const entries = performance.getEntriesByType('resource');
-        return entries
-          ${includeStatic ? '' : '.filter(e => !["img", "font", "css", "script"].some(t => e.initiatorType === t))'}
-          .map(e => ({
-            url: e.name,
-            type: e.initiatorType,
-            duration: Math.round(e.duration),
-            size: e.transferSize || 0,
-          }));
-      })()
-    `;
+    const code = networkRequestsJs(includeStatic);
     return sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
@@ -239,46 +194,22 @@ export class Page implements IPage {
       const fs = await import('node:fs');
       const path = await import('node:path');
       const dir = path.dirname(options.path);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(options.path, Buffer.from(base64, 'base64'));
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.writeFile(options.path, Buffer.from(base64, 'base64'));
     }
 
     return base64;
   }
 
   async scroll(direction: string = 'down', amount: number = 500): Promise<void> {
-    const dx = direction === 'left' ? -amount : direction === 'right' ? amount : 0;
-    const dy = direction === 'up' ? -amount : direction === 'down' ? amount : 0;
-    await sendCommand('exec', {
-      code: `window.scrollBy(${dx}, ${dy})`,
-      ...this._workspaceOpt(),
-      ...this._tabOpt(),
-    });
+    const code = scrollJs(direction, amount);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async autoScroll(options: { times?: number; delayMs?: number } = {}): Promise<void> {
     const times = options.times ?? 3;
     const delayMs = options.delayMs ?? 2000;
-    const code = `
-      (async () => {
-        for (let i = 0; i < ${times}; i++) {
-          const lastHeight = document.body.scrollHeight;
-          window.scrollTo(0, lastHeight);
-          await new Promise(resolve => {
-            let timeoutId;
-            const observer = new MutationObserver(() => {
-              if (document.body.scrollHeight > lastHeight) {
-                clearTimeout(timeoutId);
-                observer.disconnect();
-                setTimeout(resolve, 100);
-              }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-            timeoutId = setTimeout(() => { observer.disconnect(); resolve(null); }, ${delayMs});
-          });
-        }
-      })()
-    `;
+    const code = autoScrollJs(times, delayMs);
     await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 

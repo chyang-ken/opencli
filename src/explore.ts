@@ -280,7 +280,7 @@ export async function exploreUrl(
 
       // Step 5: For JSON endpoints missing a body, carefully re-fetch in-browser via a pristine iframe
       const jsonEndpoints = networkEntries.filter(e => e.contentType.includes('json') && e.method === 'GET' && e.status === 200 && !e.responseBody);
-      for (const ep of jsonEndpoints.slice(0, 5)) {
+      await Promise.allSettled(jsonEndpoints.slice(0, 5).map(async (ep) => {
         try {
           const body = await page.evaluate(`async () => {
             let iframe = null;
@@ -302,7 +302,7 @@ export async function exploreUrl(
           if (body && typeof body === 'string') { try { ep.responseBody = JSON.parse(body); } catch {} }
           else if (body && typeof body === 'object') ep.responseBody = body;
         } catch {}
-      }
+      }));
 
       // Step 6: Detect framework
       let framework: Record<string, boolean> = {};

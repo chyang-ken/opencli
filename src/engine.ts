@@ -99,12 +99,12 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
 async function discoverClisFromFs(dir: string): Promise<void> {
   try { await fs.promises.access(dir); } catch { return; }
   const promises: Promise<any>[] = [];
-  const sites = await fs.promises.readdir(dir);
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
   
-  for (const site of sites) {
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const site = entry.name;
     const siteDir = path.join(dir, site);
-    const stat = await fs.promises.stat(siteDir);
-    if (!stat.isDirectory()) continue;
     const files = await fs.promises.readdir(siteDir);
     for (const file of files) {
       const filePath = path.join(siteDir, file);

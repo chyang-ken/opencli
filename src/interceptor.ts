@@ -27,6 +27,7 @@ export function generateInterceptorJs(
   return `
     () => {
       window.${arr} = window.${arr} || [];
+      window.${arr}_errors = window.${arr}_errors || [];
       const __pattern = ${patternExpr};
 
       if (!window.${guard}) {
@@ -43,7 +44,7 @@ export function generateInterceptorJs(
               const clone = response.clone();
               const json = await clone.json();
               window.${arr}.push(json);
-            } catch(e) {}
+            } catch(e) { window.${arr}_errors.push({ url: reqUrl, error: String(e) }); }
           }
           return response;
         };
@@ -61,7 +62,7 @@ export function generateInterceptorJs(
             this.addEventListener('load', function() {
               try {
                 window.${arr}.push(JSON.parse(this.responseText));
-              } catch(e) {}
+              } catch(e) { window.${arr}_errors.push({ url: this.__opencli_url, error: String(e) }); }
             });
           }
           return __origSend.apply(this, arguments);

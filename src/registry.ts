@@ -52,13 +52,15 @@ export interface CliOptions extends Partial<Omit<CliCommand, 'args' | 'descripti
 const _registry = new Map<string, CliCommand>();
 
 export function cli(opts: CliOptions): CliCommand {
+  const strategy = opts.strategy ?? (opts.browser === false ? Strategy.PUBLIC : Strategy.COOKIE);
+  const browser = opts.browser ?? (strategy !== Strategy.PUBLIC);
   const cmd: CliCommand = {
     site: opts.site,
     name: opts.name,
     description: opts.description ?? '',
     domain: opts.domain,
-    strategy: opts.strategy ?? (opts.browser === false ? Strategy.PUBLIC : Strategy.COOKIE),
-    browser: opts.browser ?? (opts.strategy === Strategy.PUBLIC ? false : true),
+    strategy,
+    browser,
     args: opts.args ?? [],
     columns: opts.columns,
     func: opts.func,
