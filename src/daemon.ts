@@ -5,6 +5,14 @@
  *   CLI → HTTP POST /command → daemon → WebSocket → Extension
  *   Extension → WebSocket result → daemon → HTTP response → CLI
  *
+ * Security (defense-in-depth against browser-based CSRF):
+ *   1. Origin check — reject HTTP/WS from non chrome-extension:// origins
+ *   2. Custom header — require X-OpenCLI header (browsers can't send it
+ *      without CORS preflight, which we deny)
+ *   3. No CORS headers — responses never include Access-Control-Allow-Origin
+ *   4. Body size limit — 1 MB max to prevent OOM
+ *   5. WebSocket verifyClient — reject upgrade before connection is established
+ *
  * Lifecycle:
  *   - Auto-spawned by opencli on first browser command
  *   - Auto-exits after 5 minutes of idle
@@ -49,25 +57,56 @@ function resetIdleTimer(): void {
 
 // ─── HTTP Server ─────────────────────────────────────────────────────
 
+const MAX_BODY = 1024 * 1024; // 1 MB — commands are tiny; this prevents OOM
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY) { req.destroy(); reject(new Error('Body too large')); return; }
+      chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
     req.on('error', reject);
   });
 }
 
 function jsonResponse(res: ServerResponse, status: number, data: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  // ─── Security: Origin & custom-header check ──────────────────────
+  // Block browser-based CSRF: browsers always send an Origin header on
+  // cross-origin requests.  Node.js CLI fetch does NOT send Origin, so
+  // legitimate CLI requests pass through.  Chrome Extension connects via
+  // WebSocket (which bypasses this HTTP handler entirely).
+  const origin = req.headers['origin'] as string | undefined;
+  if (origin && !origin.startsWith('chrome-extension://')) {
+    jsonResponse(res, 403, { ok: false, error: 'Forbidden: cross-origin request blocked' });
+    return;
+  }
+
+  // CORS: do NOT send Access-Control-Allow-Origin for normal requests.
+  // Only handle preflight so browsers get a definitive "no" answer.
+  if (req.method === 'OPTIONS') {
+    // No ACAO header → browser will block the actual request.
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Require custom header on all HTTP requests.  Browsers cannot attach
+  // custom headers in "simple" requests, and our preflight returns no
+  // Access-Control-Allow-Headers, so scripted fetch() from web pages is
+  // blocked even if Origin check is somehow bypassed.
+  if (!req.headers['x-opencli']) {
+    jsonResponse(res, 403, { ok: false, error: 'Forbidden: missing X-OpenCLI header' });
+    return;
+  }
 
   const url = req.url ?? '/';
   const pathname = url.split('?')[0];
@@ -136,7 +175,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 // ─── WebSocket for Extension ─────────────────────────────────────────
 
 const httpServer = createServer((req, res) => { handleRequest(req, res).catch(() => { res.writeHead(500); res.end(); }); });
-const wss = new WebSocketServer({ server: httpServer, path: '/ext' });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: '/ext',
+  verifyClient: ({ req }: { req: IncomingMessage }) => {
+    // Block browser-originated WebSocket connections.  Browsers don't
+    // enforce CORS on WebSocket, so a malicious webpage could connect to
+    // ws://localhost:19825/ext and impersonate the Extension.  Real Chrome
+    // Extensions send origin chrome-extension://<id>.
+    const origin = req.headers['origin'] as string | undefined;
+    return !origin || origin.startsWith('chrome-extension://');
+  },
+});
 
 wss.on('connection', (ws: WebSocket) => {
   console.error('[daemon] Extension connected');

@@ -44,7 +44,10 @@ export async function isDaemonRunning(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${DAEMON_URL}/status`, { signal: controller.signal });
+    const res = await fetch(`${DAEMON_URL}/status`, {
+      headers: { 'X-OpenCLI': '1' },
+      signal: controller.signal,
+    });
     clearTimeout(timer);
     return res.ok;
   } catch {
@@ -59,7 +62,10 @@ export async function isExtensionConnected(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${DAEMON_URL}/status`, { signal: controller.signal });
+    const res = await fetch(`${DAEMON_URL}/status`, {
+      headers: { 'X-OpenCLI': '1' },
+      signal: controller.signal,
+    });
     clearTimeout(timer);
     if (!res.ok) return false;
     const data = await res.json() as { extensionConnected?: boolean };
@@ -90,7 +96,7 @@ export async function sendCommand(
 
       const res = await fetch(`${DAEMON_URL}/command`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-OpenCLI': '1' },
         body: JSON.stringify(command),
         signal: controller.signal,
       });
