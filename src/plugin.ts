@@ -18,6 +18,53 @@ export interface PluginInfo {
   source?: string;
 }
 
+// ── Validation helpers ──────────────────────────────────────────────────────
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * Validate that a downloaded plugin directory is a structurally valid plugin.
+ * Checks for at least one command file (.yaml, .yml, .ts, .js) and a valid
+ * package.json if it contains .ts files.
+ */
+export function validatePluginStructure(pluginDir: string): ValidationResult {
+  const errors: string[] = [];
+  
+  if (!fs.existsSync(pluginDir)) {
+    return { valid: false, errors: ['Plugin directory does not exist'] };
+  }
+
+  const files = fs.readdirSync(pluginDir);
+  const hasYaml = files.some(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+  const hasTs = files.some(f => f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.endsWith('.test.ts'));
+  const hasJs = files.some(f => f.endsWith('.js') && !f.endsWith('.d.js'));
+
+  if (!hasYaml && !hasTs && !hasJs) {
+    errors.push(`No command files found in plugin directory. A plugin must contain at least one .yaml, .ts, or .js command file.`);
+  }
+
+  if (hasTs) {
+    const pkgJsonPath = path.join(pluginDir, 'package.json');
+    if (!fs.existsSync(pkgJsonPath)) {
+      errors.push(`Plugin contains .ts files but no package.json. A package.json with "type": "module" and "@jackwener/opencli" peer dependency is required for TS plugins.`);
+    } else {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+        if (pkg.type !== 'module') {
+          errors.push(`Plugin package.json must have "type": "module" for TypeScript plugins.`);
+        }
+      } catch {
+        errors.push(`Plugin package.json is malformed or invalid JSON.`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 /**
  * Shared post-install lifecycle: npm install → host symlink → TS transpile.
  * Called by both installPlugin() and updatePlugin().
@@ -78,6 +125,13 @@ export function installPlugin(source: string): string {
     throw new Error(`Failed to clone plugin: ${err.message}`);
   }
 
+  const validation = validatePluginStructure(targetDir);
+  if (!validation.valid) {
+    // If validation fails, clean up the cloned directory and abort
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    throw new Error(`Invalid plugin structure:\n- ${validation.errors.join('\n- ')}`);
+  }
+
   postInstallLifecycle(targetDir);
   return name;
 }
@@ -110,6 +164,11 @@ export function updatePlugin(name: string): void {
     });
   } catch (err: any) {
     throw new Error(`Failed to update plugin: ${err.message}`);
+  }
+
+  const validation = validatePluginStructure(targetDir);
+  if (!validation.valid) {
+    log.warn(`Plugin "${name}" updated, but structure is now invalid:\n- ${validation.errors.join('\n- ')}`);
   }
 
   postInstallLifecycle(targetDir);
@@ -163,7 +222,7 @@ function scanPluginCommands(dir: string): string[] {
 /** Get git remote origin URL */
 function getPluginSource(dir: string): string | undefined {
   try {
-    return execSync('git config --get remote.origin.url', {
+    return execFileSync('git', ['config', '--get', 'remote.origin.url'], {
       cwd: dir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -275,4 +334,4 @@ function transpilePluginTs(pluginDir: string): void {
   }
 }
 
-export { parseSource as _parseSource };
+export { parseSource as _parseSource, validatePluginStructure as _validatePluginStructure };

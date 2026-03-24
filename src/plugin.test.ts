@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PLUGINS_DIR } from './discovery.js';
-import { listPlugins, uninstallPlugin, updatePlugin, _parseSource } from './plugin.js';
+import { listPlugins, uninstallPlugin, updatePlugin, _parseSource, _validatePluginStructure } from './plugin.js';
 
 describe('parseSource', () => {
   it('parses github:user/repo format', () => {
@@ -38,6 +38,67 @@ describe('parseSource', () => {
   it('returns null for invalid source', () => {
     expect(_parseSource('invalid')).toBeNull();
     expect(_parseSource('npm:some-package')).toBeNull();
+  });
+});
+
+describe('validatePluginStructure', () => {
+  const testDir = path.join(PLUGINS_DIR, '__test-validate__');
+
+  beforeEach(() => {
+    fs.mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(testDir, { recursive: true }); } catch {}
+  });
+
+  it('returns invalid for non-existent directory', () => {
+    const res = _validatePluginStructure(path.join(PLUGINS_DIR, '__does_not_exist__'));
+    expect(res.valid).toBe(false);
+    expect(res.errors[0]).toContain('does not exist');
+  });
+
+  it('returns invalid for empty directory', () => {
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(false);
+    expect(res.errors[0]).toContain('No command files found');
+  });
+
+  it('returns valid for YAML plugin', () => {
+    fs.writeFileSync(path.join(testDir, 'cmd.yaml'), 'site: test');
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(true);
+    expect(res.errors).toHaveLength(0);
+  });
+
+  it('returns valid for JS plugin', () => {
+    fs.writeFileSync(path.join(testDir, 'cmd.js'), 'console.log("hi");');
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(true);
+    expect(res.errors).toHaveLength(0);
+  });
+
+  it('returns invalid for TS plugin without package.json', () => {
+    fs.writeFileSync(path.join(testDir, 'cmd.ts'), 'console.log("hi");');
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(false);
+    expect(res.errors[0]).toContain('contains .ts files but no package.json');
+  });
+
+  it('returns invalid for TS plugin with missing type: module', () => {
+    fs.writeFileSync(path.join(testDir, 'cmd.ts'), 'console.log("hi");');
+    fs.writeFileSync(path.join(testDir, 'package.json'), JSON.stringify({ name: 'test' }));
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(false);
+    expect(res.errors[0]).toContain('must have "type": "module"');
+  });
+
+  it('returns valid for TS plugin with correct package.json', () => {
+    fs.writeFileSync(path.join(testDir, 'cmd.ts'), 'console.log("hi");');
+    fs.writeFileSync(path.join(testDir, 'package.json'), JSON.stringify({ type: 'module' }));
+    const res = _validatePluginStructure(testDir);
+    expect(res.valid).toBe(true);
+    expect(res.errors).toHaveLength(0);
   });
 });
 
